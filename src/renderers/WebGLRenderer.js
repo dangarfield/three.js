@@ -1354,27 +1354,37 @@ function WebGLRenderer( parameters = {} ) {
 
 		if ( materialProperties.needsLights ) {
 
+			// get all lights affecting this object's layers
+
+			var ambientLightSetup = filterAmbientLights( object, lights.state.ambientAffectedLayers, lights.state.ambient );
+			var directionalSetup = filterLights( object, lights.state.directionalAffectedLayers, lights.state.directional, lights.state.directionalShadowMap, lights.state.directionalShadowMatrix );
+			var spotSetup = filterLights( object, lights.state.spotAffectedLayers, lights.state.spot, lights.state.spotShadowMap, lights.state.spotShadowMatrix );
+			var rectAreaSetup = filterLights( object, lights.state.rectAreaAffectedLayers, lights.state.rectArea );
+			var pointSetup = filterLights( object, lights.state.pointAffectedLayers, lights.state.point, lights.state.pointShadowMap, lights.state.pointShadowMatrix );
+			var hemiSetup = filterLights( object, lights.state.hemiAffectedLayers, lights.state.hemi );
+
+
 			// wire up the material to this renderer's lighting state
 
-			uniforms.ambientLightColor.value = lights.state.ambient;
-			uniforms.lightProbe.value = lights.state.probe;
-			uniforms.directionalLights.value = lights.state.directional;
-			uniforms.directionalLightShadows.value = lights.state.directionalShadow;
-			uniforms.spotLights.value = lights.state.spot;
-			uniforms.spotLightShadows.value = lights.state.spotShadow;
-			uniforms.rectAreaLights.value = lights.state.rectArea;
-			uniforms.ltc_1.value = lights.state.rectAreaLTC1;
-			uniforms.ltc_2.value = lights.state.rectAreaLTC2;
-			uniforms.pointLights.value = lights.state.point;
-			uniforms.pointLightShadows.value = lights.state.pointShadow;
-			uniforms.hemisphereLights.value = lights.state.hemi;
+			uniforms.ambientLightColor.value = ambientLightSetup;
+			uniforms.lightProbe.value = lights.state.probe; // TODO - Added since selective lighting PR
+			uniforms.directionalLights.value = directionalSetup.lights;
+			uniforms.directionalLightShadows.value = lights.state.directionalShadow; // TODO - Added since selective lighting PR
+			uniforms.spotLights.value = spotSetup.lights;
+			uniforms.spotLightShadows.value = lights.state.spotShadow; // TODO - Added since selective lighting PR
+			uniforms.rectAreaLights.value = rectAreaSetup.lights;
+			uniforms.ltc_1.value = lights.state.rectAreaLTC1; // TODO - Added since selective lighting PR
+			uniforms.ltc_2.value = lights.state.rectAreaLTC2; // TODO - Added since selective lighting PR
+			uniforms.pointLights.value = pointSetup.lights;
+			uniforms.pointLightShadows.value = lights.state.pointShadow; // TODO - Added since selective lighting PR
+			uniforms.hemisphereLights.value = hemiSetup.lights;
 
-			uniforms.directionalShadowMap.value = lights.state.directionalShadowMap;
-			uniforms.directionalShadowMatrix.value = lights.state.directionalShadowMatrix;
-			uniforms.spotShadowMap.value = lights.state.spotShadowMap;
-			uniforms.spotShadowMatrix.value = lights.state.spotShadowMatrix;
-			uniforms.pointShadowMap.value = lights.state.pointShadowMap;
-			uniforms.pointShadowMatrix.value = lights.state.pointShadowMatrix;
+			uniforms.directionalShadowMap.value = directionalSetup.shadowMaps;
+			uniforms.directionalShadowMatrix.value = directionalSetup.shadowMatrices;
+			uniforms.spotShadowMap.value = spotSetup.shadowMaps;
+			uniforms.spotShadowMatrix.value = spotSetup.shadowMatrices;
+			uniforms.pointShadowMap.value = pointSetup.shadowMaps;
+			uniforms.pointShadowMatrix.value = pointSetup.shadowMatrices;
 			// TODO (abelnation): add area lights shadow info to uniforms
 
 		}
@@ -1386,6 +1396,64 @@ function WebGLRenderer( parameters = {} ) {
 		materialProperties.uniformsList = uniformsList;
 
 		return program;
+
+	}
+
+	/* Function to only consider lights and shadow maps/matrices that should
+	affect the considered object */
+	function filterLights( object, lightAffectedLayers, lights, shadowMaps, shadowMatrices ) {
+
+		var materialLayers = object.layers;
+		var result = { lights: [], shadowMaps: [], shadowMatrices: [] };
+		var i = 0, light, lightLayers;
+		var lightsLength = 0, shadowMapsLength = 0, shadowMatricesLength = 0;
+		for ( i = 0; i < lights.length; i ++ ) {
+
+			light = lights[ i ];
+			lightLayers = lightAffectedLayers[ i ];
+			if ( lightLayers.test( materialLayers ) ) {
+
+				result.lights[ lightsLength ++ ] = light;
+				if ( shadowMaps ) {
+
+					result.shadowMaps[ shadowMapsLength ++ ] = shadowMaps[ i ];
+
+				}
+				if ( shadowMatrices ) {
+
+					result.shadowMatrices[ shadowMatricesLength ++ ] = shadowMatrices[ i ];
+
+				}
+
+			}
+
+		}
+		result.lights.length = lightsLength;
+		result.shadowMaps.length = shadowMapsLength;
+		result.shadowMatrices.length = shadowMatricesLength;
+		return result;
+
+	}
+	/* Merge all ambient colors affecting the object's layer into a single color. */
+	function filterAmbientLights( object, lightAffectedLayers, lights ) {
+
+		var materialLayers = object.layers;
+		var result = [ 0, 0, 0 ];
+		var i = 0, light, lightLayers;
+		for ( i = 0; i < lights.length; i ++ ) {
+
+			light = lights[ i ];
+			lightLayers = lightAffectedLayers[ i ];
+			if ( lightLayers.test( materialLayers ) ) {
+
+				result[ 0 ] += light.color.r * light.intensity;
+				result[ 1 ] += light.color.g * light.intensity;
+				result[ 2 ] += light.color.b * light.intensity;
+
+			}
+
+		}
+		return result;
 
 	}
 

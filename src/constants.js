@@ -164,6 +164,7 @@ export const RGBM16Encoding = 3005;
 export const RGBDEncoding = 3006;
 export const BasicDepthPacking = 3200;
 export const RGBADepthPacking = 3201;
+export const NumberOfLightTypes = 6;
 export const TangentSpaceNormalMap = 0;
 export const ObjectSpaceNormalMap = 1;
 

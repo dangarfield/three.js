@@ -7,7 +7,7 @@
 	typeof exports === 'object' && typeof module !== 'undefined' ? factory(exports) :
 	typeof define === 'function' && define.amd ? define(['exports'], factory) :
 	(global = typeof globalThis !== 'undefined' ? globalThis : global || self, factory(global.THREE = {}));
-}(this, (function (exports) { 'use strict';
+})(this, (function (exports) { 'use strict';
 
 	const REVISION = '136dev';
 	const MOUSE = {
@@ -185,6 +185,7 @@
 	const RGBDEncoding = 3006;
 	const BasicDepthPacking = 3200;
 	const RGBADepthPacking = 3201;
+	const NumberOfLightTypes = 6;
 	const TangentSpaceNormalMap = 0;
 	const ObjectSpaceNormalMap = 1;
 	const ZeroStencilOp = 0;
@@ -11817,12 +11818,11 @@
 		}
 
 		_setEncoding(uniform, texture) {
-			/* if ( this._renderer.capabilities.isWebGL2 === true && texture.format === RGBAFormat && texture.type === UnsignedByteType && texture.encoding === sRGBEncoding ) {
-					uniform.value = ENCODINGS[ LinearEncoding ];
-				} else {
-					uniform.value = ENCODINGS[ texture.encoding ];
-				} */
-			uniform.value = ENCODINGS[texture.encoding];
+			if (this._renderer.capabilities.isWebGL2 === true && texture.format === RGBAFormat && texture.type === UnsignedByteType && texture.encoding === sRGBEncoding) {
+				uniform.value = ENCODINGS[LinearEncoding];
+			} else {
+				uniform.value = ENCODINGS[texture.encoding];
+			}
 		}
 
 		_textureToCubeUV(texture, cubeUVRenderTarget) {
@@ -14370,10 +14370,10 @@
 			} else {
 				encoding = LinearEncoding;
 			}
-			/* if ( isWebGL2 && map && map.isTexture && map.format === RGBAFormat && map.type === UnsignedByteType && map.encoding === sRGBEncoding ) {
-					encoding = LinearEncoding; // disable inline decode for sRGB textures in WebGL 2
-				} */
 
+			if (isWebGL2 && map && map.isTexture && map.format === RGBAFormat && map.type === UnsignedByteType && map.encoding === sRGBEncoding) {
+				encoding = LinearEncoding; // disable inline decode for sRGB textures in WebGL 2
+			}
 
 			return encoding;
 		}
@@ -14479,11 +14479,11 @@
 				morphTargets: !!object.geometry && !!object.geometry.morphAttributes.position,
 				morphNormals: !!object.geometry && !!object.geometry.morphAttributes.normal,
 				morphTargetsCount: !!object.geometry && !!object.geometry.morphAttributes.position ? object.geometry.morphAttributes.position.length : 0,
-				numDirLights: lights.directional.length,
-				numPointLights: lights.point.length,
-				numSpotLights: lights.spot.length,
-				numRectAreaLights: lights.rectArea.length,
-				numHemiLights: lights.hemi.length,
+				numDirLights: countLights(object, lights.directionalAffectedLayers),
+				numPointLights: countLights(object, lights.pointAffectedLayers),
+				numSpotLights: countLights(object, lights.spotAffectedLayers),
+				numRectAreaLights: countLights(object, lights.rectAreaAffectedLayers),
+				numHemiLights: countLights(object, lights.hemiAffectedLayers),
 				numDirLightShadows: lights.directionalShadowMap.length,
 				numPointLightShadows: lights.pointShadowMap.length,
 				numSpotLightShadows: lights.spotShadowMap.length,
@@ -14510,6 +14510,21 @@
 				customProgramCacheKey: material.customProgramCacheKey()
 			};
 			return parameters;
+		}
+
+		function countLights(object, lightLayers) {
+			var i = 0,
+					result = 0;
+			var len = 0;
+			if (lightLayers != undefined) len = lightLayers.length;
+
+			for (i = 0; i < len; i++) {
+				if (!object.material || object.layers.test(lightLayers[i])) {
+					result++;
+				}
+			}
+
+			return result;
 		}
 
 		function getProgramCacheKey(parameters) {
@@ -14921,24 +14936,31 @@
 				numPointShadows: -1,
 				numSpotShadows: -1
 			},
-			ambient: [0, 0, 0],
+			config: new Uint16Array(32 * NumberOfLightTypes),
+			ambient: [],
+			ambientAffectedLayers: [],
 			probe: [],
 			directional: [],
+			directionalAffectedLayers: [],
 			directionalShadow: [],
 			directionalShadowMap: [],
 			directionalShadowMatrix: [],
 			spot: [],
+			spotAffectedLayers: [],
 			spotShadow: [],
 			spotShadowMap: [],
 			spotShadowMatrix: [],
 			rectArea: [],
+			rectAreaAffectedLayers: [],
 			rectAreaLTC1: null,
 			rectAreaLTC2: null,
 			point: [],
+			pointAffectedLayers: [],
 			pointShadow: [],
 			pointShadowMap: [],
 			pointShadowMatrix: [],
-			hemi: []
+			hemi: [],
+			hemiAffectedLayers: []
 		};
 
 		for (let i = 0; i < 9; i++) state.probe.push(new Vector3());
@@ -14959,10 +14981,12 @@
 			let spotLength = 0;
 			let rectAreaLength = 0;
 			let hemiLength = 0;
+			var ambientLength = 0;
 			let numDirectionalShadows = 0;
 			let numPointShadows = 0;
 			let numSpotShadows = 0;
-			lights.sort(shadowCastingLightsFirst); // artist-friendly light intensity scaling factor
+			lights.sort(shadowCastingLightsFirst);
+			var affectedLayers; // artist-friendly light intensity scaling factor
 
 			const scaleFactor = physicallyCorrectLights !== true ? Math.PI : 1;
 
@@ -14971,12 +14995,17 @@
 				const color = light.color;
 				const intensity = light.intensity;
 				const distance = light.distance;
+				affectedLayers = light.layers;
 				const shadowMap = light.shadow && light.shadow.map ? light.shadow.map.texture : null;
 
 				if (light.isAmbientLight) {
 					r += color.r * intensity * scaleFactor;
 					g += color.g * intensity * scaleFactor;
 					b += color.b * intensity * scaleFactor;
+					state.ambientAffectedLayers[ambientLength] = affectedLayers;
+					state.ambient[ambientLength] = light;
+					addLightToLightConfig(affectedLayers, state.config, 0, false);
+					ambientLength++;
 				} else if (light.isLightProbe) {
 					for (let j = 0; j < 9; j++) {
 						state.probe[j].addScaledVector(light.sh.coefficients[j], intensity);
@@ -14998,7 +15027,9 @@
 						numDirectionalShadows++;
 					}
 
+					state.directionalAffectedLayers[directionalLength] = affectedLayers;
 					state.directional[directionalLength] = uniforms;
+					addLightToLightConfig(affectedLayers, state.config, 1, light.castShadow);
 					directionalLength++;
 				} else if (light.isSpotLight) {
 					const uniforms = cache.get(light);
@@ -15022,7 +15053,9 @@
 						numSpotShadows++;
 					}
 
+					state.spotAffectedLayers[spotLength] = affectedLayers;
 					state.spot[spotLength] = uniforms;
+					addLightToLightConfig(affectedLayers, state.config, 2, light.castShadow);
 					spotLength++;
 				} else if (light.isRectAreaLight) {
 					const uniforms = cache.get(light); // (a) intensity is the total visible light emitted
@@ -15032,7 +15065,9 @@
 					uniforms.color.copy(color).multiplyScalar(intensity);
 					uniforms.halfWidth.set(light.width * 0.5, 0.0, 0.0);
 					uniforms.halfHeight.set(0.0, light.height * 0.5, 0.0);
+					state.rectAreaAffectedLayers[rectAreaLength] = affectedLayers;
 					state.rectArea[rectAreaLength] = uniforms;
+					addLightToLightConfig(affectedLayers, state.config, 3, light.castShadow);
 					rectAreaLength++;
 				} else if (light.isPointLight) {
 					const uniforms = cache.get(light);
@@ -15055,13 +15090,17 @@
 						numPointShadows++;
 					}
 
+					state.pointAffectedLayers[pointLength] = affectedLayers;
 					state.point[pointLength] = uniforms;
+					addLightToLightConfig(affectedLayers, state.config, 4, light.castShadow);
 					pointLength++;
 				} else if (light.isHemisphereLight) {
 					const uniforms = cache.get(light);
 					uniforms.skyColor.copy(light.color).multiplyScalar(intensity * scaleFactor);
 					uniforms.groundColor.copy(light.groundColor).multiplyScalar(intensity * scaleFactor);
+					state.hemiAffectedLayers[hemiLength] = affectedLayers;
 					state.hemi[hemiLength] = uniforms;
+					addLightToLightConfig(affectedLayers, state.config, 5, light.castShadow);
 					hemiLength++;
 				}
 			}
@@ -15085,12 +15124,10 @@
 				}
 			}
 
-			state.ambient[0] = r;
-			state.ambient[1] = g;
-			state.ambient[2] = b;
 			const hash = state.hash;
 
-			if (hash.directionalLength !== directionalLength || hash.pointLength !== pointLength || hash.spotLength !== spotLength || hash.rectAreaLength !== rectAreaLength || hash.hemiLength !== hemiLength || hash.numDirectionalShadows !== numDirectionalShadows || hash.numPointShadows !== numPointShadows || hash.numSpotShadows !== numSpotShadows) {
+			if (hash.ambientLength !== ambientLength || hash.directionalLength !== directionalLength || hash.pointLength !== pointLength || hash.spotLength !== spotLength || hash.rectAreaLength !== rectAreaLength || hash.hemiLength !== hemiLength || hash.numDirectionalShadows !== numDirectionalShadows || hash.numPointShadows !== numPointShadows || hash.numSpotShadows !== numSpotShadows) {
+				state.ambient.length = ambientLength;
 				state.directional.length = directionalLength;
 				state.spot.length = spotLength;
 				state.rectArea.length = rectAreaLength;
@@ -15105,6 +15142,7 @@
 				state.directionalShadowMatrix.length = numDirectionalShadows;
 				state.pointShadowMatrix.length = numPointShadows;
 				state.spotShadowMatrix.length = numSpotShadows;
+				hash.ambientLength = ambientLength;
 				hash.directionalLength = directionalLength;
 				hash.pointLength = pointLength;
 				hash.spotLength = spotLength;
@@ -15169,6 +15207,22 @@
 					uniforms.direction.transformDirection(viewMatrix);
 					uniforms.direction.normalize();
 					hemiLength++;
+				}
+			}
+		} // Function used to count lights per type and per layer using a flat array.
+
+
+		function addLightToLightConfig(layers, config, typeIndex, castShadow) {
+			var i = 0,
+					mask = 0,
+					index = 0;
+
+			for (i = 0; i < 32; i++) {
+				mask = 1 << i;
+
+				if (mask & layers.mask && castShadow) {
+					index = i * NumberOfLightTypes + typeIndex;
+					config[index]++;
 				}
 			}
 		}
@@ -15609,9 +15663,11 @@
 
 		function renderObject(object, camera, shadowCamera, light, type) {
 			if (object.visible === false) return;
-			const visible = object.layers.test(camera.layers);
+			const visible = object.layers.test(camera.layers); // Objects not affected by current light should not project shadows.
 
-			if (visible && (object.isMesh || object.isLine || object.isPoints)) {
+			var projectsShadowOnLayer = !object.material || object.layers.test(light.layers);
+
+			if (visible && projectsShadowOnLayer && (object.isMesh || object.isLine || object.isPoints)) {
 				if ((object.castShadow || object.receiveShadow && type === VSMShadowMap) && (!object.frustumCulled || _frustum.intersectsObject(object))) {
 					object.modelViewMatrix.multiplyMatrices(shadowCamera.matrixWorldInverse, object.matrixWorld);
 
@@ -16471,9 +16527,7 @@
 			_gl.generateMipmap(target);
 		}
 
-		function getInternalFormat(internalFormatName, glFormat, glType
-		/*, encoding*/
-		) {
+		function getInternalFormat(internalFormatName, glFormat, glType, encoding) {
 			if (isWebGL2 === false) return glFormat;
 
 			if (internalFormatName !== null) {
@@ -16497,9 +16551,8 @@
 
 			if (glFormat === _gl.RGBA) {
 				if (glType === _gl.FLOAT) internalFormat = _gl.RGBA32F;
-				if (glType === _gl.HALF_FLOAT) internalFormat = _gl.RGBA16F; //if ( glType === _gl.UNSIGNED_BYTE ) internalFormat = ( encoding === sRGBEncoding ) ? _gl.SRGB8_ALPHA8 : _gl.RGBA8;
-
-				if (glType === _gl.UNSIGNED_BYTE) internalFormat = _gl.RGBA8;
+				if (glType === _gl.HALF_FLOAT) internalFormat = _gl.RGBA16F;
+				if (glType === _gl.UNSIGNED_BYTE) internalFormat = encoding === sRGBEncoding ? _gl.SRGB8_ALPHA8 : _gl.RGBA8;
 			}
 
 			if (internalFormat === _gl.R16F || internalFormat === _gl.R32F || internalFormat === _gl.RGBA16F || internalFormat === _gl.RGBA32F) {
@@ -19804,25 +19857,38 @@
 			materialProperties.lightsStateVersion = lightsStateVersion;
 
 			if (materialProperties.needsLights) {
-				// wire up the material to this renderer's lighting state
-				uniforms.ambientLightColor.value = lights.state.ambient;
-				uniforms.lightProbe.value = lights.state.probe;
-				uniforms.directionalLights.value = lights.state.directional;
-				uniforms.directionalLightShadows.value = lights.state.directionalShadow;
-				uniforms.spotLights.value = lights.state.spot;
-				uniforms.spotLightShadows.value = lights.state.spotShadow;
-				uniforms.rectAreaLights.value = lights.state.rectArea;
-				uniforms.ltc_1.value = lights.state.rectAreaLTC1;
-				uniforms.ltc_2.value = lights.state.rectAreaLTC2;
-				uniforms.pointLights.value = lights.state.point;
-				uniforms.pointLightShadows.value = lights.state.pointShadow;
-				uniforms.hemisphereLights.value = lights.state.hemi;
-				uniforms.directionalShadowMap.value = lights.state.directionalShadowMap;
-				uniforms.directionalShadowMatrix.value = lights.state.directionalShadowMatrix;
-				uniforms.spotShadowMap.value = lights.state.spotShadowMap;
-				uniforms.spotShadowMatrix.value = lights.state.spotShadowMatrix;
-				uniforms.pointShadowMap.value = lights.state.pointShadowMap;
-				uniforms.pointShadowMatrix.value = lights.state.pointShadowMatrix; // TODO (abelnation): add area lights shadow info to uniforms
+				// get all lights affecting this object's layers
+				var ambientLightSetup = filterAmbientLights(object, lights.state.ambientAffectedLayers, lights.state.ambient);
+				var directionalSetup = filterLights(object, lights.state.directionalAffectedLayers, lights.state.directional, lights.state.directionalShadowMap, lights.state.directionalShadowMatrix);
+				var spotSetup = filterLights(object, lights.state.spotAffectedLayers, lights.state.spot, lights.state.spotShadowMap, lights.state.spotShadowMatrix);
+				var rectAreaSetup = filterLights(object, lights.state.rectAreaAffectedLayers, lights.state.rectArea);
+				var pointSetup = filterLights(object, lights.state.pointAffectedLayers, lights.state.point, lights.state.pointShadowMap, lights.state.pointShadowMatrix);
+				var hemiSetup = filterLights(object, lights.state.hemiAffectedLayers, lights.state.hemi); // wire up the material to this renderer's lighting state
+
+				uniforms.ambientLightColor.value = ambientLightSetup;
+				uniforms.lightProbe.value = lights.state.probe; // TODO - Added since selective lighting PR
+
+				uniforms.directionalLights.value = directionalSetup.lights;
+				uniforms.directionalLightShadows.value = lights.state.directionalShadow; // TODO - Added since selective lighting PR
+
+				uniforms.spotLights.value = spotSetup.lights;
+				uniforms.spotLightShadows.value = lights.state.spotShadow; // TODO - Added since selective lighting PR
+
+				uniforms.rectAreaLights.value = rectAreaSetup.lights;
+				uniforms.ltc_1.value = lights.state.rectAreaLTC1; // TODO - Added since selective lighting PR
+
+				uniforms.ltc_2.value = lights.state.rectAreaLTC2; // TODO - Added since selective lighting PR
+
+				uniforms.pointLights.value = pointSetup.lights;
+				uniforms.pointLightShadows.value = lights.state.pointShadow; // TODO - Added since selective lighting PR
+
+				uniforms.hemisphereLights.value = hemiSetup.lights;
+				uniforms.directionalShadowMap.value = directionalSetup.shadowMaps;
+				uniforms.directionalShadowMatrix.value = directionalSetup.shadowMatrices;
+				uniforms.spotShadowMap.value = spotSetup.shadowMaps;
+				uniforms.spotShadowMatrix.value = spotSetup.shadowMatrices;
+				uniforms.pointShadowMap.value = pointSetup.shadowMaps;
+				uniforms.pointShadowMatrix.value = pointSetup.shadowMatrices; // TODO (abelnation): add area lights shadow info to uniforms
 			}
 
 			const progUniforms = program.getUniforms();
@@ -19830,6 +19896,69 @@
 			materialProperties.currentProgram = program;
 			materialProperties.uniformsList = uniformsList;
 			return program;
+		}
+		/* Function to only consider lights and shadow maps/matrices that should
+		affect the considered object */
+
+
+		function filterLights(object, lightAffectedLayers, lights, shadowMaps, shadowMatrices) {
+			var materialLayers = object.layers;
+			var result = {
+				lights: [],
+				shadowMaps: [],
+				shadowMatrices: []
+			};
+			var i = 0,
+					light,
+					lightLayers;
+			var lightsLength = 0,
+					shadowMapsLength = 0,
+					shadowMatricesLength = 0;
+
+			for (i = 0; i < lights.length; i++) {
+				light = lights[i];
+				lightLayers = lightAffectedLayers[i];
+
+				if (lightLayers.test(materialLayers)) {
+					result.lights[lightsLength++] = light;
+
+					if (shadowMaps) {
+						result.shadowMaps[shadowMapsLength++] = shadowMaps[i];
+					}
+
+					if (shadowMatrices) {
+						result.shadowMatrices[shadowMatricesLength++] = shadowMatrices[i];
+					}
+				}
+			}
+
+			result.lights.length = lightsLength;
+			result.shadowMaps.length = shadowMapsLength;
+			result.shadowMatrices.length = shadowMatricesLength;
+			return result;
+		}
+		/* Merge all ambient colors affecting the object's layer into a single color. */
+
+
+		function filterAmbientLights(object, lightAffectedLayers, lights) {
+			var materialLayers = object.layers;
+			var result = [0, 0, 0];
+			var i = 0,
+					light,
+					lightLayers;
+
+			for (i = 0; i < lights.length; i++) {
+				light = lights[i];
+				lightLayers = lightAffectedLayers[i];
+
+				if (lightLayers.test(materialLayers)) {
+					result[0] += light.color.r * light.intensity;
+					result[1] += light.color.g * light.intensity;
+					result[2] += light.color.b * light.intensity;
+				}
+			}
+
+			return result;
 		}
 
 		function updateCommonMaterialProperties(material, parameters) {
@@ -24465,7 +24594,9 @@
 
 
 	function isValidDiagonal(a, b) {
-		return a.next.i !== b.i && a.prev.i !== b.i && !intersectsPolygon(a, b) && (locallyInside(a, b) && locallyInside(b, a) && middleInside(a, b) && (area(a.prev, a, b.prev) || area(a, b.prev, b)) || // does not create opposite-facing sectors
+		return a.next.i !== b.i && a.prev.i !== b.i && !intersectsPolygon(a, b) && ( // dones't intersect other edges
+		locallyInside(a, b) && locallyInside(b, a) && middleInside(a, b) && ( // locally visible
+		area(a.prev, a, b.prev) || area(a, b.prev, b)) || // does not create opposite-facing sectors
 		equals(a, b) && area(a.prev, a, a.next) > 0 && area(b.prev, b, b.next) > 0); // special zero-length case
 	} // signed area of a triangle
 
@@ -36392,6 +36523,7 @@
 	exports.NotEqualDepth = NotEqualDepth;
 	exports.NotEqualStencilFunc = NotEqualStencilFunc;
 	exports.NumberKeyframeTrack = NumberKeyframeTrack;
+	exports.NumberOfLightTypes = NumberOfLightTypes;
 	exports.Object3D = Object3D;
 	exports.ObjectLoader = ObjectLoader;
 	exports.ObjectSpaceNormalMap = ObjectSpaceNormalMap;
@@ -36602,4 +36734,4 @@
 
 	Object.defineProperty(exports, '__esModule', { value: true });
 
-})));
+}));
